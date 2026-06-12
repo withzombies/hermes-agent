@@ -1003,6 +1003,30 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         if not sender or not (chat_guid or chat_identifier) or not text:
             return web.json_response({"error": "missing message fields"}, status=400)
 
+        # Sender allowlist: when BLUEBUBBLES_ALLOWED_USERS is set (comma-
+        # separated phone numbers and/or emails), silently drop messages from
+        # any other handle. iMessage handles arrive as E.164 numbers or Apple
+        # ID emails; numbers are compared digits-only so "+1 (929) 256-9847"
+        # and "19292569847" match.
+        _allowed_raw = os.getenv("BLUEBUBBLES_ALLOWED_USERS", "").strip()
+        if _allowed_raw:
+
+            def _norm_handle(value: str) -> str:
+                v = (value or "").strip().lower()
+                if "@" in v:
+                    return v
+                return "".join(ch for ch in v if ch.isdigit())
+
+            _allowed = {
+                _norm_handle(a) for a in _allowed_raw.split(",") if a.strip()
+            }
+            if _norm_handle(sender) not in _allowed:
+                logger.info(
+                    "[bluebubbles] ignoring message from non-allowlisted sender %s",
+                    sender,
+                )
+                return web.Response(text="ok")
+
         session_chat_id = chat_guid or chat_identifier
         is_group = bool(record.get("isGroup")) or (";+;" in (chat_guid or ""))
         if is_group and self.require_mention:
