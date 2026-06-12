@@ -931,7 +931,7 @@ class EmailAdapter(BasePlatformAdapter):
 
         # Thread context for reply
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject") or os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1045,7 +1045,7 @@ class EmailAdapter(BasePlatformAdapter):
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject") or os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1125,7 +1125,7 @@ class EmailAdapter(BasePlatformAdapter):
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject") or os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1215,11 +1215,23 @@ async def _standalone_send(
     if not all([address, password, smtp_host]):
         return {"error": "Email not configured (EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_SMTP_HOST required)"}
 
+    # A leading "Subject: ..." line in the message becomes the real email
+    # subject; without one, fall back to EMAIL_DEFAULT_SUBJECT or the legacy
+    # fixed subject.
+    subject = os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
+    body = message
+    if message.lstrip().lower().startswith("subject:"):
+        first_line, _, rest = message.lstrip().partition("\n")
+        candidate = first_line.split(":", 1)[1].strip()
+        if candidate:
+            subject = candidate
+            body = rest.lstrip("\n")
+
     try:
-        msg = MIMEText(message, "plain", "utf-8")
+        msg = MIMEText(body, "plain", "utf-8")
         msg["From"] = address
         msg["To"] = chat_id
-        msg["Subject"] = "Hermes Agent"
+        msg["Subject"] = subject
         msg["Date"] = formatdate(localtime=True)
 
         server = smtplib.SMTP(smtp_host, smtp_port)
