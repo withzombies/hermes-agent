@@ -29,7 +29,7 @@ from email.header import decode_header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
-from email.utils import formatdate
+from email.utils import formataddr, formatdate
 from email import encoders
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -926,7 +926,11 @@ class EmailAdapter(BasePlatformAdapter):
     ) -> str:
         """Send an email via SMTP. Runs in executor thread."""
         msg = MIMEMultipart()
-        msg["From"] = self._address
+        msg["From"] = (
+            formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
+            if os.getenv("EMAIL_DISPLAY_NAME", "").strip()
+            else self._address
+        )
         msg["To"] = to_addr
 
         # Thread context for reply
@@ -1041,7 +1045,11 @@ class EmailAdapter(BasePlatformAdapter):
     ) -> str:
         """Send an email with multiple file attachments via SMTP."""
         msg = MIMEMultipart()
-        msg["From"] = self._address
+        msg["From"] = (
+            formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
+            if os.getenv("EMAIL_DISPLAY_NAME", "").strip()
+            else self._address
+        )
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
@@ -1121,7 +1129,11 @@ class EmailAdapter(BasePlatformAdapter):
     ) -> str:
         """Send an email with a file attachment via SMTP."""
         msg = MIMEMultipart()
-        msg["From"] = self._address
+        msg["From"] = (
+            formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
+            if os.getenv("EMAIL_DISPLAY_NAME", "").strip()
+            else self._address
+        )
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
@@ -1227,9 +1239,13 @@ async def _standalone_send(
             subject = candidate
             body = rest.lstrip("\n")
 
+    # Optional friendly display name on the From header (RFC 5322 name-addr).
+    # Without it, recipients see only the bare address.
+    display_name = os.getenv("EMAIL_DISPLAY_NAME", "").strip()
+
     try:
         msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = address
+        msg["From"] = formataddr((display_name, address)) if display_name else address
         msg["To"] = chat_id
         msg["Subject"] = subject
         msg["Date"] = formatdate(localtime=True)
