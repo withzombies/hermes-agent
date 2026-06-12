@@ -41,6 +41,7 @@ from gateway.platforms.base import (
     cache_audio_from_bytes,
     cache_document_from_bytes,
     cache_image_from_url,
+    third_party_banner_for,
 )
 from gateway.platforms.helpers import redact_phone
 from gateway.platforms.signal_format import markdown_to_signal
@@ -742,6 +743,7 @@ class SignalAdapter(BasePlatformAdapter):
             source=source,
             text=text or "",
             message_type=msg_type,
+            channel_prompt=third_party_banner_for(sender, sender_uuid),
             media_urls=media_urls,
             media_types=media_types,
             timestamp=timestamp,

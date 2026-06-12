@@ -273,7 +273,9 @@ from gateway.platforms.base import (
     SUPPORTED_DOCUMENT_TYPES,
     cache_image_from_url,
     cache_audio_from_url,
+    third_party_banner_for,
 )
+from gateway.whatsapp_identity import expand_whatsapp_aliases
 from utils import env_int
 
 
@@ -1502,10 +1504,16 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 if not body.startswith(_OWNER_REPLY_PREFIX):
                     body = f"{_OWNER_REPLY_PREFIX}{body}"
 
+            # Third-party banner: match against principals using all alias
+            # forms of the sender (LID ↔ phone), so principals are never
+            # mis-flagged as outsiders.
+            _wa_sender = str(data.get("senderId") or data.get("from") or "")
+            _wa_candidates = [_wa_sender, *expand_whatsapp_aliases(_wa_sender)]
             return MessageEvent(
                 text=body,
                 message_type=msg_type,
                 source=source,
+                channel_prompt=third_party_banner_for(*_wa_candidates),
                 raw_message=data,
                 message_id=data.get("messageId"),
                 media_urls=cached_urls,
