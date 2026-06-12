@@ -419,6 +419,23 @@ def _extract_attachments(
     return attachments
 
 
+def _apply_signature(body: str) -> str:
+    """Append EMAIL_SIGNATURE to an outbound body, RFC-style.
+
+    The env value may contain literal \\n escapes for multi-line
+    signatures. The "-- " delimiter is added here so clients can fold the
+    block. No-op when unset or when the signature already appears in the
+    body (e.g. the model copied it in).
+    """
+    sig = os.getenv("EMAIL_SIGNATURE", "")
+    if not sig:
+        return body
+    sig = sig.replace("\\n", "\n").strip()
+    if not sig or sig in body:
+        return body
+    return body.rstrip() + "\n\n-- \n" + sig + "\n"
+
+
 class EmailAdapter(BasePlatformAdapter):
     """Email gateway adapter using IMAP (receive) and SMTP (send)."""
 
@@ -925,6 +942,7 @@ class EmailAdapter(BasePlatformAdapter):
         reply_to_msg_id: Optional[str] = None,
     ) -> str:
         """Send an email via SMTP. Runs in executor thread."""
+        body = _apply_signature(body)
         msg = MIMEMultipart()
         msg["From"] = (
             formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
@@ -1044,6 +1062,7 @@ class EmailAdapter(BasePlatformAdapter):
         file_paths: List[str],
     ) -> str:
         """Send an email with multiple file attachments via SMTP."""
+        body = _apply_signature(body)
         msg = MIMEMultipart()
         msg["From"] = (
             formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
@@ -1128,6 +1147,7 @@ class EmailAdapter(BasePlatformAdapter):
         file_name: Optional[str] = None,
     ) -> str:
         """Send an email with a file attachment via SMTP."""
+        body = _apply_signature(body)
         msg = MIMEMultipart()
         msg["From"] = (
             formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
@@ -1242,6 +1262,9 @@ async def _standalone_send(
     # Optional friendly display name on the From header (RFC 5322 name-addr).
     # Without it, recipients see only the bare address.
     display_name = os.getenv("EMAIL_DISPLAY_NAME", "").strip()
+
+    # Optional EMAIL_SIGNATURE block, appended below an RFC "-- " delimiter.
+    body = _apply_signature(body)
 
     try:
         msg = MIMEText(body, "plain", "utf-8")
