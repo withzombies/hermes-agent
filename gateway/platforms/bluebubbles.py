@@ -1032,9 +1032,15 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         # separated phone numbers and/or emails), silently drop messages from
         # any other handle. iMessage handles arrive as E.164 numbers or Apple
         # ID emails; numbers are compared digits-only so "+1 (929) 256-9847"
-        # and "19292569847" match.
+        # and "19292569847" match. BLUEBUBBLES_ALLOW_ALL_USERS=true (or a "*"
+        # entry in the list) opens inbound to everyone — the gateway authz
+        # layer still applies, and the agent persona distinguishes principals
+        # from third parties.
+        _allow_all = os.getenv("BLUEBUBBLES_ALLOW_ALL_USERS", "").strip().lower() in {
+            "true", "1", "yes", "on",
+        }
         _allowed_raw = os.getenv("BLUEBUBBLES_ALLOWED_USERS", "").strip()
-        if _allowed_raw:
+        if _allowed_raw and not _allow_all and "*" not in _allowed_raw.split(","):
 
             def _norm_handle(value: str) -> str:
                 v = (value or "").strip().lower()
