@@ -312,8 +312,12 @@ class BlueBubblesAdapter(BasePlatformAdapter):
     def _webhook_url(self) -> str:
         """Compute the external webhook URL for BlueBubbles registration."""
         host = self.webhook_host
+        # Use the IPv4 literal, not "localhost". On macOS "localhost" resolves
+        # to IPv6 ::1 first, but the webhook listener binds to IPv4
+        # 127.0.0.1 — so BlueBubbles' POSTs hit ::1:PORT and fail with
+        # ECONNREFUSED, silently dropping every inbound message.
         if host in {"0.0.0.0", "127.0.0.1", "localhost", "::"}:
-            host = "localhost"
+            host = "127.0.0.1"
         return f"http://{host}:{self.webhook_port}{self.webhook_path}"
 
     @property
