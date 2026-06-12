@@ -155,6 +155,12 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         self._private_api_enabled: Optional[bool] = None
         self._helper_connected: bool = False
         self._guid_cache: OrderedDict[str, str] = OrderedDict()
+        # Dedup recently-processed inbound message GUIDs. BlueBubbles fires
+        # both ``new-message`` and a follow-up ``updated-message`` (delivery/
+        # read status) for the same message — and occasionally re-fires the
+        # same event — so without this the agent responds to each inbound
+        # twice. Keyed by message GUID; bounded LRU.
+        self._seen_message_guids: OrderedDict[str, bool] = OrderedDict()
 
     # ------------------------------------------------------------------
     # API helpers
@@ -919,6 +925,21 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         )
         if is_from_me:
             return web.Response(text="ok")
+
+        # Deduplicate by message GUID. The same inbound message arrives via
+        # both ``new-message`` and ``updated-message`` (and is sometimes
+        # re-fired), which would otherwise make the agent reply twice.
+        _dedup_guid = self._value(
+            record.get("guid"),
+            record.get("messageGuid"),
+            record.get("id"),
+        )
+        if _dedup_guid:
+            if _dedup_guid in self._seen_message_guids:
+                return web.Response(text="ok")
+            self._seen_message_guids[_dedup_guid] = True
+            while len(self._seen_message_guids) > _GUID_CACHE_SIZE:
+                self._seen_message_guids.popitem(last=False)
 
         # Skip tapback reactions delivered as messages
         assoc_type = record.get("associatedMessageType")
