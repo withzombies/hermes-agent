@@ -476,6 +476,11 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
         return None
     if _gateway_surface_passes_raw_text(platform):
         return text
+    if _gateway_quiet():
+        # Operator opted out of system/status chatter — drop on messaging
+        # surfaces. The message is still emitted to logs via the agent's
+        # status path.
+        return None
 
     text = _redact_gateway_user_facing_secrets(text)
     if _TELEGRAM_NOISY_STATUS_RE.search(text):
@@ -1299,6 +1304,20 @@ def _home_thread_env_var(platform_name: str) -> str:
     return f"{_home_target_env_var(platform_name)}_THREAD_ID"
 
 
+def _gateway_quiet() -> bool:
+    """True when the operator has opted out of gateway system/status messages.
+
+    Suppresses operational notices and agent status/lifecycle chatter in chat
+    (compaction, retries, provider errors, home-channel prompt, credit bands).
+    Does NOT touch interactive prompts (approval/clarify), the busy-ack/heartbeat,
+    or real task results — those take different delivery paths. Config bridges
+    ``gateway.quiet_system_messages`` → this env var at startup.
+    """
+    return os.getenv("HERMES_QUIET_SYSTEM_MESSAGES", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _restart_notification_pending() -> bool:
     """Return True when a /restart completion marker is waiting to be delivered."""
     return (_hermes_home / ".restart_notify.json").exists()
@@ -1690,6 +1709,9 @@ if _config_path.exists():
                 os.environ["HERMES_GATEWAY_PLATFORM_CONNECT_TIMEOUT"] = str(
                     _gateway_cfg["platform_connect_timeout"]
                 )
+            _quiet = _gateway_cfg.get("quiet_system_messages")
+            if _quiet is not None:
+                os.environ["HERMES_QUIET_SYSTEM_MESSAGES"] = "1" if _quiet else "0"
     except Exception as _bridge_err:
         # Previously this was silent (`except Exception: pass`), which
         # hid partial bridge failures and let .env defaults shadow
@@ -5642,18 +5664,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pass
 
         status_detail = f" ({', '.join(status_parts)})" if status_parts else ""
+        # Keep iteration/tool detail in logs only — the user-facing ack stays
+        # warm and jargon-free.
+        if status_detail:
+            logger.debug("Busy-ack detail (hidden from chat):%s", status_detail)
         if is_steer_mode:
             message = (
-                f"⏩ Steered into current run{status_detail}. "
-                f"Your message arrives after the next tool call."
+                "⏩ Slipping that into the current run — it'll land right after "
+                "the next step."
             )
         elif is_queue_mode and demoted_for_subagents:
             # #30170 — explain the demotion so the user knows their
             # follow-up didn't accidentally kill the subagent and
             # discovers `/stop` as the explicit escape hatch.
             message = (
-                f"⏳ Subagent working{status_detail} — your message is queued for "
-                f"when it finishes (use /stop to cancel everything)."
+                "⏳ Still working on something — your message is queued for when "
+                "it finishes (use /stop to cancel everything)."
             )
         elif is_queue_mode and demoted_for_compression:
             message = (
@@ -5662,13 +5688,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
         elif is_queue_mode:
             message = (
-                f"⏳ Queued for the next turn{status_detail}. "
-                f"I'll respond once the current task finishes."
+                "⏳ Got your message — I'll reply as soon as I wrap up what I'm on."
             )
         else:
             message = (
-                f"⚡ Interrupting current task{status_detail}. "
-                f"I'll respond to your message shortly."
+                "⚡ One sec — folding that into what I'm doing now."
             )
 
         # First-touch onboarding: the very first time a user sends a message
@@ -8907,6 +8931,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not adapter:
             return
 
+        if _gateway_quiet():
+            # Operator opted out of operational notices (home-channel prompt,
+            # credit/usage bands). Interactive prompts use other paths.
+            return
+
         config = getattr(self, "config", None)
         notice_delivery = "public"
         if config and hasattr(config, "get_notice_delivery"):
@@ -11513,7 +11542,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                         )
                                         try:
                                             _adapter = self._adapter_for_source(source)
-                                            if _adapter and source.chat_id:
+                                            if _adapter and source.chat_id and not _gateway_quiet():
                                                 await _adapter.send(source.chat_id, _warn_msg, metadata=_hyg_meta)
                                         except Exception as _werr:
                                             logger.warning(
@@ -11537,7 +11566,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                         )
                                         try:
                                             _adapter = self._adapter_for_source(source)
-                                            if _adapter and source.chat_id:
+                                            if _adapter and source.chat_id and not _gateway_quiet():
                                                 await _adapter.send(source.chat_id, _aux_msg, metadata=_hyg_meta)
                                         except Exception as _werr:
                                             logger.warning(
@@ -19590,10 +19619,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             _status_detail = " — " + ", ".join(_parts)
                     except Exception:
                         pass
+                # Keep the technical detail (iteration/tool/activity) in logs
+                # only; the user-facing heartbeat stays warm and jargon-free.
+                if _status_detail:
+                    logger.debug("Heartbeat detail (hidden from chat):%s", _status_detail)
                 _heartbeat_text = (
                     _generic_status_phrase("status")
                     if _long_running_mode == "generic"
-                    else f"⏳ Working — {_elapsed_mins} min{_status_detail}"
+                    else f"⏳ Still on it — {_elapsed_mins} min in, hang tight!"
                 )
                 try:
                     _notify_res = None
@@ -19721,7 +19754,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             and _idle_secs >= _agent_warning):
                         _warning_fired = True
                         _warn_adapter = self._adapter_for_source(source)
-                        if _warn_adapter:
+                        if _warn_adapter and not _gateway_quiet():
                             _elapsed_warn = int(_agent_warning // 60) or 1
                             _remaining_mins = int((_agent_timeout - _agent_warning) // 60) or 1
                             try:
