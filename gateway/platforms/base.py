@@ -1780,19 +1780,84 @@ def _normalize_principal_identifier(value: Optional[str]) -> str:
     return digits or v
 
 
-def sender_is_principal(*candidates: Optional[str]) -> bool:
-    """True if any candidate handle matches HERMES_PRINCIPAL_IDENTIFIERS.
+# Optional, richer companion to HERMES_PRINCIPAL_IDENTIFIERS that also names
+# each principal so inbound messages can carry a *positive* "this is Ryan"
+# identification (see principal_channel_banner). Format:
+#   "Ryan=handle|handle|...;Valerie=handle|..."
+# Handles accept any form (phone, Signal ACI UUID, email, WhatsApp LID) and are
+# normalized identically to the identifier list. Listing someone here also marks
+# them a principal (union with HERMES_PRINCIPAL_IDENTIFIERS), so this var can be
+# the single source of truth.
+_PRINCIPAL_NAMES_CACHE: "Optional[tuple]" = None
 
-    Returns True (no banner) when the env var is unset, so behavior is
-    unchanged unless an operator opts in by listing their principals.
-    """
+
+def _load_principal_names() -> dict:
+    """Parse HERMES_PRINCIPAL_NAMES into {normalized_handle: name}. Memoised on
+    the raw env string so repeated inbound messages don't re-parse it."""
+    global _PRINCIPAL_NAMES_CACHE
+    raw = os.getenv("HERMES_PRINCIPAL_NAMES", "").strip()
+    if _PRINCIPAL_NAMES_CACHE is not None and _PRINCIPAL_NAMES_CACHE[0] == raw:
+        return _PRINCIPAL_NAMES_CACHE[1]
+    mapping: dict = {}
+    for group in raw.split(";"):
+        group = group.strip()
+        if not group or "=" not in group:
+            continue
+        name, _, handles = group.partition("=")
+        name = name.strip()
+        if not name:
+            continue
+        for handle in handles.split("|"):
+            norm = _normalize_principal_identifier(handle)
+            if norm:
+                mapping[norm] = name
+    _PRINCIPAL_NAMES_CACHE = (raw, mapping)
+    return mapping
+
+
+def _principals_configured() -> bool:
+    """True when the operator has listed principals via either env var."""
+    return bool(
+        os.getenv("HERMES_PRINCIPAL_IDENTIFIERS", "").strip()
+        or os.getenv("HERMES_PRINCIPAL_NAMES", "").strip()
+    )
+
+
+def _principal_identifier_set() -> set:
+    """Normalized handles that mark a sender as a principal — the union of
+    HERMES_PRINCIPAL_IDENTIFIERS entries and HERMES_PRINCIPAL_NAMES handles."""
+    allowed = set()
     raw = os.getenv("HERMES_PRINCIPAL_IDENTIFIERS", "").strip()
-    if not raw:
-        return True
-    allowed = {
-        _normalize_principal_identifier(p) for p in raw.split(",") if p.strip()
-    }
+    if raw:
+        allowed |= {
+            _normalize_principal_identifier(p) for p in raw.split(",") if p.strip()
+        }
+    allowed |= set(_load_principal_names().keys())
     allowed.discard("")
+    return allowed
+
+
+def _principal_name_for(*candidates: Optional[str]) -> Optional[str]:
+    """Return the configured name for the first candidate handle that maps to a
+    named principal in HERMES_PRINCIPAL_NAMES, else None."""
+    names = _load_principal_names()
+    for cand in candidates:
+        norm = _normalize_principal_identifier(cand)
+        if norm and norm in names:
+            return names[norm]
+    return None
+
+
+def sender_is_principal(*candidates: Optional[str]) -> bool:
+    """True if any candidate handle matches a configured principal.
+
+    Returns True (no banner) when no principals are configured, so behavior is
+    unchanged unless an operator opts in via HERMES_PRINCIPAL_IDENTIFIERS or
+    HERMES_PRINCIPAL_NAMES.
+    """
+    if not _principals_configured():
+        return True
+    allowed = _principal_identifier_set()
     if not allowed:
         return True
     for cand in candidates:
@@ -1802,11 +1867,48 @@ def sender_is_principal(*candidates: Optional[str]) -> bool:
     return False
 
 
+def _principal_banner(name: Optional[str]) -> str:
+    """Positive system banner affirming the sender is a verified principal.
+
+    Symmetric to THIRD_PARTY_SYSTEM_BANNER: where that warns about an outsider,
+    this tells the model the sender IS a trusted principal so it never mistakes
+    one of its owners for a stranger. Trust is grounded in the verified channel
+    handle, NOT in anything the message text claims — so the standing approval
+    and confidentiality rules still apply.
+    """
+    who = name or "one of your principals (Ryan or Valerie)"
+    lane = f" Use {name}'s memory lane." if name else ""
+    return (
+        f"✅ SYSTEM NOTICE — This message is from {who}, identified by their "
+        "verified messaging handle (not by anything claimed in the text). Treat "
+        "them as a trusted principal whose direction you follow." + lane +
+        " Standing rules still hold: anything binding or financial for Ryan needs "
+        "his explicit sign-off, and never cross principals' confidentiality lanes."
+    )
+
+
 def third_party_banner_for(*candidates: Optional[str]) -> Optional[str]:
     """Return the third-party banner string when none of *candidates* is a
     known principal, else None (so it can be passed straight to
     ``MessageEvent.channel_prompt``)."""
     return None if sender_is_principal(*candidates) else THIRD_PARTY_SYSTEM_BANNER
+
+
+def principal_channel_banner(*candidates: Optional[str]) -> Optional[str]:
+    """Channel-prompt for an inbound message, based on verified sender identity.
+
+    - No principals configured  → None (back-compat: no banner at all).
+    - Sender is a known principal → positive, *named* identification banner.
+    - Otherwise (outsider)        → the third-party warning banner.
+
+    Supersedes ``third_party_banner_for`` at adapter call sites: it adds the
+    positive case so a principal is never silently mistaken for a stranger.
+    """
+    if not _principals_configured():
+        return None
+    if sender_is_principal(*candidates):
+        return _principal_banner(_principal_name_for(*candidates))
+    return THIRD_PARTY_SYSTEM_BANNER
 
 
 @dataclass

@@ -273,6 +273,7 @@ from gateway.platforms.base import (
     SUPPORTED_DOCUMENT_TYPES,
     cache_image_from_url,
     cache_audio_from_url,
+    principal_channel_banner,
     third_party_banner_for,
 )
 from gateway.whatsapp_identity import expand_whatsapp_aliases
@@ -1513,7 +1514,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 text=body,
                 message_type=msg_type,
                 source=source,
-                channel_prompt=third_party_banner_for(*_wa_candidates),
+                channel_prompt=principal_channel_banner(*_wa_candidates),
                 raw_message=data,
                 message_id=data.get("messageId"),
                 media_urls=cached_urls,

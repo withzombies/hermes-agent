@@ -30,6 +30,7 @@ from gateway.platforms.base import (
     cache_image_from_bytes,
     cache_audio_from_bytes,
     cache_document_from_bytes,
+    principal_channel_banner,
     third_party_banner_for,
 )
 from gateway.platforms.helpers import strip_markdown
@@ -1080,7 +1081,7 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             text=text,
             message_type=msg_type,
             source=source,
-            channel_prompt=third_party_banner_for(sender),
+            channel_prompt=principal_channel_banner(sender),
             raw_message=payload,
             message_id=self._value(
                 record.get("guid"),
