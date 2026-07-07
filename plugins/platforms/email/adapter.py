@@ -29,7 +29,7 @@ from email.header import decode_header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
-from email.utils import formataddr, formatdate
+from email.utils import formatdate
 from email import encoders
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -419,21 +419,14 @@ def _extract_attachments(
     return attachments
 
 
-def _apply_signature(body: str) -> str:
-    """Append EMAIL_SIGNATURE to an outbound body, RFC-style.
-
-    The env value may contain literal \\n escapes for multi-line
-    signatures. The "-- " delimiter is added here so clients can fold the
-    block. No-op when unset or when the signature already appears in the
-    body (e.g. the model copied it in).
-    """
-    sig = os.getenv("EMAIL_SIGNATURE", "")
-    if not sig:
-        return body
-    sig = sig.replace("\\n", "\n").strip()
-    if not sig or sig in body:
-        return body
-    return body.rstrip() + "\n\n-- \n" + sig + "\n"
+# Outbound-email fork patches (subject/from/signature) — logic lives in
+# gateway/local_patches/email_outbound.py; imported here as single-line hooks.
+from gateway.local_patches.email_outbound import (  # noqa: E402  # fork
+    apply_signature as _apply_signature,
+    default_subject as _default_subject,
+    from_header as _from_header,
+    lift_subject as _lift_subject,
+)
 
 
 class EmailAdapter(BasePlatformAdapter):
@@ -944,16 +937,12 @@ class EmailAdapter(BasePlatformAdapter):
         """Send an email via SMTP. Runs in executor thread."""
         body = _apply_signature(body)
         msg = MIMEMultipart()
-        msg["From"] = (
-            formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
-            if os.getenv("EMAIL_DISPLAY_NAME", "").strip()
-            else self._address
-        )
+        msg["From"] = _from_header(self._address)  # fork
         msg["To"] = to_addr
 
         # Thread context for reply
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject") or os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
+        subject = ctx.get("subject") or _default_subject()  # fork
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1064,15 +1053,11 @@ class EmailAdapter(BasePlatformAdapter):
         """Send an email with multiple file attachments via SMTP."""
         body = _apply_signature(body)
         msg = MIMEMultipart()
-        msg["From"] = (
-            formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
-            if os.getenv("EMAIL_DISPLAY_NAME", "").strip()
-            else self._address
-        )
+        msg["From"] = _from_header(self._address)  # fork
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject") or os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
+        subject = ctx.get("subject") or _default_subject()  # fork
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1149,15 +1134,11 @@ class EmailAdapter(BasePlatformAdapter):
         """Send an email with a file attachment via SMTP."""
         body = _apply_signature(body)
         msg = MIMEMultipart()
-        msg["From"] = (
-            formataddr((os.getenv("EMAIL_DISPLAY_NAME", "").strip(), self._address))
-            if os.getenv("EMAIL_DISPLAY_NAME", "").strip()
-            else self._address
-        )
+        msg["From"] = _from_header(self._address)  # fork
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject") or os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
+        subject = ctx.get("subject") or _default_subject()  # fork
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1247,28 +1228,14 @@ async def _standalone_send(
     if not all([address, password, smtp_host]):
         return {"error": "Email not configured (EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_SMTP_HOST required)"}
 
-    # A leading "Subject: ..." line in the message becomes the real email
-    # subject; without one, fall back to EMAIL_DEFAULT_SUBJECT or the legacy
-    # fixed subject.
-    subject = os.getenv("EMAIL_DEFAULT_SUBJECT", "Hermes Agent")
-    body = message
-    if message.lstrip().lower().startswith("subject:"):
-        first_line, _, rest = message.lstrip().partition("\n")
-        candidate = first_line.split(":", 1)[1].strip()
-        if candidate:
-            subject = candidate
-            body = rest.lstrip("\n")
-
-    # Optional friendly display name on the From header (RFC 5322 name-addr).
-    # Without it, recipients see only the bare address.
-    display_name = os.getenv("EMAIL_DISPLAY_NAME", "").strip()
-
-    # Optional EMAIL_SIGNATURE block, appended below an RFC "-- " delimiter.
+    # Fork: lift a leading "Subject: ..." line into the header, add the optional
+    # display-name From and EMAIL_SIGNATURE. See gateway/local_patches/email_outbound.py.
+    subject, body = _lift_subject(message)
     body = _apply_signature(body)
 
     try:
         msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = formataddr((display_name, address)) if display_name else address
+        msg["From"] = _from_header(address)
         msg["To"] = chat_id
         msg["Subject"] = subject
         msg["Date"] = formatdate(localtime=True)

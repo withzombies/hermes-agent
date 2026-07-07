@@ -34,6 +34,7 @@ from gateway.platforms.base import (
     third_party_banner_for,
 )
 from gateway.platforms.helpers import strip_markdown
+from gateway.local_patches.bluebubbles_gate import sender_allowed, seen_or_add  # fork
 
 logger = logging.getLogger(__name__)
 
@@ -928,20 +929,16 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         if is_from_me:
             return web.Response(text="ok")
 
-        # Deduplicate by message GUID. The same inbound message arrives via
-        # both ``new-message`` and ``updated-message`` (and is sometimes
-        # re-fired), which would otherwise make the agent reply twice.
+        # Deduplicate by message GUID (fork: gateway/local_patches/bluebubbles_gate.py).
+        # The same inbound arrives via both ``new-message`` and ``updated-message``
+        # (and is sometimes re-fired), which would otherwise make the agent reply twice.
         _dedup_guid = self._value(
             record.get("guid"),
             record.get("messageGuid"),
             record.get("id"),
         )
-        if _dedup_guid:
-            if _dedup_guid in self._seen_message_guids:
-                return web.Response(text="ok")
-            self._seen_message_guids[_dedup_guid] = True
-            while len(self._seen_message_guids) > _GUID_CACHE_SIZE:
-                self._seen_message_guids.popitem(last=False)
+        if seen_or_add(self._seen_message_guids, _dedup_guid, _GUID_CACHE_SIZE):
+            return web.Response(text="ok")
 
         # Skip tapback reactions delivered as messages
         assoc_type = record.get("associatedMessageType")
@@ -1030,35 +1027,15 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         if not sender or not (chat_guid or chat_identifier) or not text:
             return web.json_response({"error": "missing message fields"}, status=400)
 
-        # Sender allowlist: when BLUEBUBBLES_ALLOWED_USERS is set (comma-
-        # separated phone numbers and/or emails), silently drop messages from
-        # any other handle. iMessage handles arrive as E.164 numbers or Apple
-        # ID emails; numbers are compared digits-only so "+1 (929) 256-9847"
-        # and "19292569847" match. BLUEBUBBLES_ALLOW_ALL_USERS=true (or a "*"
-        # entry in the list) opens inbound to everyone — the gateway authz
-        # layer still applies, and the agent persona distinguishes principals
-        # from third parties.
-        _allow_all = os.getenv("BLUEBUBBLES_ALLOW_ALL_USERS", "").strip().lower() in {
-            "true", "1", "yes", "on",
-        }
-        _allowed_raw = os.getenv("BLUEBUBBLES_ALLOWED_USERS", "").strip()
-        if _allowed_raw and not _allow_all and "*" not in _allowed_raw.split(","):
-
-            def _norm_handle(value: str) -> str:
-                v = (value or "").strip().lower()
-                if "@" in v:
-                    return v
-                return "".join(ch for ch in v if ch.isdigit())
-
-            _allowed = {
-                _norm_handle(a) for a in _allowed_raw.split(",") if a.strip()
-            }
-            if _norm_handle(sender) not in _allowed:
-                logger.info(
-                    "[bluebubbles] ignoring message from non-allowlisted sender %s",
-                    sender,
-                )
-                return web.Response(text="ok")
+        # Sender allowlist (fork: gateway/local_patches/bluebubbles_gate.py) —
+        # BLUEBUBBLES_ALLOWED_USERS gates inbound; BLUEBUBBLES_ALLOW_ALL_USERS or a
+        # "*" entry opens it to everyone (gateway authz + persona still apply).
+        if not sender_allowed(sender):
+            logger.info(
+                "[bluebubbles] ignoring message from non-allowlisted sender %s",
+                sender,
+            )
+            return web.Response(text="ok")
 
         session_chat_id = chat_guid or chat_identifier
         is_group = bool(record.get("isGroup")) or (";+;" in (chat_guid or ""))
