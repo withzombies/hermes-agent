@@ -1739,7 +1739,6 @@ class ProcessingOutcome(Enum):
 # gateway/local_patches/principals.py; re-exported here so the bluebubbles,
 # signal, and whatsapp adapters keep importing these names from base unchanged.
 from gateway.local_patches.principals import (  # noqa: E402,F401  # fork
-    THIRD_PARTY_SYSTEM_BANNER,
     sender_is_principal,
     third_party_banner_for,
     principal_channel_banner,

@@ -63,7 +63,7 @@ merge drops it). `CLAUDE.md` is fork-owned and safe.
 
 | Module | Provides | Consumed by (hook site) |
 |---|---|---|
-| `principals.py` | `THIRD_PARTY_SYSTEM_BANNER`, `sender_is_principal`, `third_party_banner_for`, `principal_channel_banner` (+ private env-parsing helpers) | `gateway/platforms/base.py` re-exports; adapters call `principal_channel_banner` |
+| `principals.py` | `sender_is_principal`, `third_party_banner_for`, `principal_channel_banner` (+ private env-parsing & name-templating helpers) | `gateway/platforms/base.py` re-exports; adapters call `principal_channel_banner` |
 | `quiet.py` | `is_quiet()` | `gateway/run.py` (aliased as `_gateway_quiet`) |
 | `status_copy.py` | `busy_ack_text(...)` — warm busy-ack variants | `gateway/run.py` busy-ack block |
 | `email_outbound.py` | `default_subject()`, `lift_subject()`, `from_header()`, `apply_signature()` | `plugins/platforms/email/adapter.py` (4 send paths) |
@@ -114,10 +114,14 @@ Injects an ephemeral `MessageEvent.channel_prompt` per inbound based on the
 | Env var | Effect |
 |---|---|
 | `HERMES_PRINCIPAL_IDENTIFIERS` | Flat list of principal handles (any form) |
-| `HERMES_PRINCIPAL_NAMES` | `Ryan=handle\|…;Valerie=handle\|…` — names *and* counts as principal |
+| `HERMES_PRINCIPAL_NAMES` | `Name=handle\|…;Name=handle\|…` — names *and* counts as principal |
+| `HERMES_PRINCIPAL_PRIMARY` | Optional — the "boss" (binding/financial sign-off). Defaults to the first name in `HERMES_PRINCIPAL_NAMES` |
 
-Unset → no banner (backward-compatible). Non-principal → `THIRD_PARTY_SYSTEM_BANNER`
-("⚠️ NOT FROM RYAN OR VALERIE"); principal → positive named banner.
+Unset → no banner (backward-compatible). **Banner names are not hardcoded** — the
+outsider/positive banner text is templated from `HERMES_PRINCIPAL_NAMES` (and
+`HERMES_PRINCIPAL_PRIMARY` for the financial-authority clause). Non-principal →
+the "⚠️ NOT FROM &lt;principals&gt;" warning; principal → positive named banner.
+With no names configured the banners read generically ("your principals").
 
 **Hooks:** `gateway/platforms/base.py` re-exports the four names (so adapter
 imports stay unchanged). Adapters set `channel_prompt=principal_channel_banner(...)`:
