@@ -19591,14 +19591,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             _status_detail = " — " + ", ".join(_parts)
                     except Exception:
                         pass
-                # Keep the technical detail (iteration/tool/activity) in logs
-                # only; the user-facing heartbeat stays warm and jargon-free.
-                if _status_detail:
-                    logger.debug("Heartbeat detail (hidden from chat):%s", _status_detail)
                 _heartbeat_text = (
                     _generic_status_phrase("status")
                     if _long_running_mode == "generic"
-                    else f"⏳ Still on it — {_elapsed_mins} min in, hang tight!"
+                    else f"⏳ Working — {_elapsed_mins} min{_status_detail}"
                 )
                 try:
                     _notify_res = None
