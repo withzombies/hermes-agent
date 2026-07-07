@@ -1304,18 +1304,8 @@ def _home_thread_env_var(platform_name: str) -> str:
     return f"{_home_target_env_var(platform_name)}_THREAD_ID"
 
 
-def _gateway_quiet() -> bool:
-    """True when the operator has opted out of gateway system/status messages.
-
-    Suppresses operational notices and agent status/lifecycle chatter in chat
-    (compaction, retries, provider errors, home-channel prompt, credit bands).
-    Does NOT touch interactive prompts (approval/clarify), the busy-ack/heartbeat,
-    or real task results — those take different delivery paths. Config bridges
-    ``gateway.quiet_system_messages`` → this env var at startup.
-    """
-    return os.getenv("HERMES_QUIET_SYSTEM_MESSAGES", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+# _gateway_quiet: local fork patch — logic lives in gateway/local_patches/quiet.py
+from gateway.local_patches.quiet import is_quiet as _gateway_quiet  # noqa: E402  # fork
 
 
 def _restart_notification_pending() -> bool:
@@ -1823,6 +1813,7 @@ from gateway.restart import (
     GATEWAY_SERVICE_RESTART_EXIT_CODE,
     parse_restart_drain_timeout,
 )
+from gateway.local_patches.status_copy import busy_ack_text  # fork
 
 
 from gateway.whatsapp_identity import (
@@ -5668,32 +5659,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # warm and jargon-free.
         if status_detail:
             logger.debug("Busy-ack detail (hidden from chat):%s", status_detail)
-        if is_steer_mode:
-            message = (
-                "⏩ Slipping that into the current run — it'll land right after "
-                "the next step."
-            )
-        elif is_queue_mode and demoted_for_subagents:
-            # #30170 — explain the demotion so the user knows their
-            # follow-up didn't accidentally kill the subagent and
-            # discovers `/stop` as the explicit escape hatch.
-            message = (
-                "⏳ Still working on something — your message is queued for when "
-                "it finishes (use /stop to cancel everything)."
-            )
-        elif is_queue_mode and demoted_for_compression:
-            message = (
-                f"⏳ Compressing context{status_detail} — your message is queued for "
-                f"when it finishes (use /stop to cancel everything)."
-            )
-        elif is_queue_mode:
-            message = (
-                "⏳ Got your message — I'll reply as soon as I wrap up what I'm on."
-            )
-        else:
-            message = (
-                "⚡ One sec — folding that into what I'm doing now."
-            )
+        message = busy_ack_text(  # fork: gateway/local_patches/status_copy.py
+            is_steer_mode=is_steer_mode,
+            is_queue_mode=is_queue_mode,
+            demoted_for_subagents=demoted_for_subagents,
+            demoted_for_compression=demoted_for_compression,
+            status_detail=status_detail,
+        )
 
         # First-touch onboarding: the very first time a user sends a message
         # while the agent is busy, append a one-time hint explaining the
