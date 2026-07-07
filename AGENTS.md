@@ -6,9 +6,15 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 > **This is the `withzombies` fork.** Every change we carry over upstream
 > (NousResearch/hermes-agent) is inventoried in [LOCAL_PATCHES.md](LOCAL_PATCHES.md),
 > and fork-specific deployment/persona context is in [CLAUDE.md](CLAUDE.md). Read
-> LOCAL_PATCHES.md before rebasing/merging upstream. Fork logic lives in the
-> `gateway/local_patches/` package; upstream files carry only single-line hooks
-> tagged `# fork`. Keep LOCAL_PATCHES.md updated when patches change.
+> LOCAL_PATCHES.md before rebasing/merging upstream.
+>
+> **Rule: keep fork patches in separate files so upstream merges stay clean.** Put
+> the *logic* of any fork change in its own file under the `gateway/local_patches/`
+> package and leave only a **single-line call-in** (one import + one call, tagged
+> `# fork`) in the upstream-owned file. New files never conflict on rebase and a
+> one-line hook almost never does — do **not** inline multi-line patches into
+> upstream files. Prefer upstream config over a code patch when a native knob
+> exists. Keep LOCAL_PATCHES.md updated when patches change.
 
 **Never give up on the right solution.**
 
