@@ -2,6 +2,14 @@
 
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
 
+<!-- fork -->
+> **This is the `withzombies` fork.** Every change we carry over upstream
+> (NousResearch/hermes-agent) is inventoried in [LOCAL_PATCHES.md](LOCAL_PATCHES.md),
+> and fork-specific deployment/persona context is in [CLAUDE.md](CLAUDE.md). Read
+> LOCAL_PATCHES.md before rebasing/merging upstream. Fork logic lives in the
+> `gateway/local_patches/` package; upstream files carry only single-line hooks
+> tagged `# fork`. Keep LOCAL_PATCHES.md updated when patches change.
+
 **Never give up on the right solution.**
 
 ## What Hermes Is
