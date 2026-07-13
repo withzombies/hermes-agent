@@ -7,15 +7,72 @@ and no signature. These helpers add the operator-configurable pieces:
 - ``from_header()``      — EMAIL_DISPLAY_NAME as an RFC 5322 name-addr From.
 - ``apply_signature()``  — EMAIL_SIGNATURE appended below an RFC "-- " delimiter.
 - ``lift_subject()``     — lift a leading "Subject: ..." body line into the
-                           real header (outbound/standalone path only).
+  real header (outbound/standalone path only).
+- ``reply_all_context()`` / ``apply_reply_all_headers()`` — preserve an
+  inbound email's To/Cc recipients on a true Reply All, excluding the agent.
 
 Called as single lines from plugins/platforms/email/adapter.py so that file
 carries no fork logic of its own.
 """
 
 import os
-from email.utils import formataddr
-from typing import Tuple
+from email.utils import formataddr, getaddresses
+from typing import Dict, Tuple
+
+
+def reply_all_context(
+    to_header: str,
+    cc_header: str,
+    sender_address: str,
+    agent_address: str,
+) -> Dict[str, str]:
+    """Build safe Reply All headers from an inbound message's To/Cc fields.
+
+    The direct sender remains the primary recipient. Existing To recipients
+    remain To, existing Cc recipients remain Cc, and the agent's own address
+    is removed. Addresses are deduplicated case-insensitively while retaining
+    first-seen order.
+    """
+    agent = agent_address.strip().lower()
+    sender = sender_address.strip().lower()
+    to_addresses = []
+    cc_addresses = []
+    seen = set()
+
+    def add(target, address):
+        normalized = address.strip().lower()
+        if not normalized or normalized in {agent} or normalized in seen:
+            return
+        seen.add(normalized)
+        target.append(address.strip())
+
+    add(to_addresses, sender_address)
+    for _name, address in getaddresses([to_header or ""]):
+        add(to_addresses, address)
+    for _name, address in getaddresses([cc_header or ""]):
+        add(cc_addresses, address)
+
+    # A sender that was also listed in Cc belongs in To for the reply.
+    return {
+        "to": ", ".join(to_addresses) or sender_address,
+        "cc": ", ".join(cc_addresses),
+    }
+
+
+def apply_reply_all_headers(message, context: Dict[str, str], fallback_to: str) -> None:
+    """Replace an outbound message's recipients with stored Reply All headers."""
+    reply_to = context.get("to") or fallback_to
+    if message.get("To"):
+        message.replace_header("To", reply_to)
+    else:
+        message["To"] = reply_to
+
+    cc = context.get("cc", "")
+    if cc:
+        if message.get("Cc"):
+            message.replace_header("Cc", cc)
+        else:
+            message["Cc"] = cc
 
 
 def default_subject() -> str:

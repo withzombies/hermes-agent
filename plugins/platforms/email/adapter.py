@@ -422,10 +422,12 @@ def _extract_attachments(
 # Outbound-email fork patches (subject/from/signature) — logic lives in
 # gateway/local_patches/email_outbound.py; imported here as single-line hooks.
 from gateway.local_patches.email_outbound import (  # noqa: E402  # fork
+    apply_reply_all_headers as _apply_reply_all_headers,
     apply_signature as _apply_signature,
     default_subject as _default_subject,
     from_header as _from_header,
     lift_subject as _lift_subject,
+    reply_all_context as _reply_all_context,
 )
 
 
@@ -737,6 +739,8 @@ class EmailAdapter(BasePlatformAdapter):
                         "uid": uid,
                         "sender_addr": sender_addr,
                         "sender_name": sender_name,
+                        "to_header": msg.get("To", ""),
+                        "cc_header": msg.get("Cc", ""),
                         "subject": subject,
                         "message_id": message_id,
                         "in_reply_to": in_reply_to,
@@ -877,6 +881,12 @@ class EmailAdapter(BasePlatformAdapter):
         self._thread_context[sender_addr] = {
             "subject": subject,
             "message_id": msg_data["message_id"],
+            **_reply_all_context(
+                msg_data.get("to_header", ""),
+                msg_data.get("cc_header", ""),
+                sender_addr,
+                self._address,
+            ),
         }
 
         source = self.build_source(
@@ -942,6 +952,7 @@ class EmailAdapter(BasePlatformAdapter):
 
         # Thread context for reply
         ctx = self._thread_context.get(to_addr, {})
+        _apply_reply_all_headers(msg, ctx, to_addr)  # fork
         subject = ctx.get("subject") or _default_subject()  # fork
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
@@ -1057,6 +1068,7 @@ class EmailAdapter(BasePlatformAdapter):
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
+        _apply_reply_all_headers(msg, ctx, to_addr)  # fork
         subject = ctx.get("subject") or _default_subject()  # fork
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
@@ -1138,6 +1150,7 @@ class EmailAdapter(BasePlatformAdapter):
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
+        _apply_reply_all_headers(msg, ctx, to_addr)  # fork
         subject = ctx.get("subject") or _default_subject()  # fork
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"

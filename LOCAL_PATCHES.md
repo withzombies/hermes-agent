@@ -66,7 +66,7 @@ merge drops it). `CLAUDE.md` is fork-owned and safe.
 | `principals.py` | `sender_is_principal`, `third_party_banner_for`, `principal_channel_banner` (+ private env-parsing & name-templating helpers) | `gateway/platforms/base.py` re-exports; adapters call `principal_channel_banner` |
 | `quiet.py` | `is_quiet()` | `gateway/run.py` (aliased as `_gateway_quiet`) |
 | `status_copy.py` | `busy_ack_text(...)` — warm busy-ack variants | `gateway/run.py` busy-ack block |
-| `email_outbound.py` | `default_subject()`, `lift_subject()`, `from_header()`, `apply_signature()` | `plugins/platforms/email/adapter.py` (4 send paths) |
+| `email_outbound.py` | `default_subject()`, `lift_subject()`, `from_header()`, `apply_signature()`, Reply All recipient helpers | `plugins/platforms/email/adapter.py` (4 send paths) |
 | `bluebubbles_gate.py` | `sender_allowed()`, `seen_or_add()` | `gateway/platforms/bluebubbles.py` webhook handler |
 
 ## The patches, by domain
@@ -84,9 +84,12 @@ signature. Logic: `gateway/local_patches/email_outbound.py`.
 **Hooks** (`plugins/platforms/email/adapter.py`, marked `# fork`): the fork
 import block near the top; `_send_email` / `_send_email_with_attachments` /
 `_send_email_with_attachment` each call `_from_header()`, `_apply_signature()`,
-`_default_subject()`; `_standalone_send` also calls `_lift_subject()` (the
-`Subject:` first-line lift, outbound-only). We also revert upstream's
-`from email.utils import formataddr, formatdate` back to `formatdate` only.
+`_default_subject()`, and `_apply_reply_all_headers()`; `_dispatch_message`
+stores original To/Cc headers through `_reply_all_context()` so Reply All
+preserves roles while excluding Lucy's own address. `_standalone_send` also
+calls `_lift_subject()` (the `Subject:` first-line lift, outbound-only). We
+also revert upstream's `from email.utils import formataddr, formatdate` back
+to `formatdate` only.
 
 ### 2. BlueBubbles — inbound gating
 BlueBubbles is a **built-in** platform, so it can't use the shared plugin
@@ -160,6 +163,31 @@ the technical detail (iteration/tool/elapsed) in logs only. Logic:
 `scripts/whatsapp-bridge/package.json` adds `"link-preview-js": "^3.2.0"` (+ the
 `package-lock.json` entry). Baileys needs it to build outbound link-preview
 cards. Inherently inline (a JSON data line — nothing to extract).
+
+### 7. Google Workspace skill — Gmail Reply All
+`gmail reply` upstream is **sender-only**: it fetches only `From/Subject/Message-ID`,
+hardcodes `To = sender`, and sets no `Cc` — so any principal (or anyone) who was
+on the original `To`/`Cc` gets silently dropped from Lucy's reply. This is the
+**pull path** and the one that matters for external threads (the push adapter
+drops non-allowlisted senders, so external two-way mail rides this skill).
+
+**Fix** (`skills/productivity/google-workspace/scripts/google_api.py`, direct
+edit — skills don't use the `gateway/local_patches/` hook mechanism): `gmail_reply`
+now also reads `To`/`Cc`, resolves our own address via `getProfile`, and calls the
+new `_reply_all_recipients()` helper to Reply All **by default** — original sender
++ everyone on To → To, Cc → Cc, our own address dropped, de-duped. New flags:
+`--to`/`--cc` (additive) and `--no-reply-all` (restores sender-only). Both the
+`gws`-binary and Python-client branches are patched identically.
+
+**Multi-copy gotcha:** this file is deployed to `~/.hermes/skills/` and is **not**
+this repo — the tracked copy here is the source. When you change it, sync all live
+copies: the active `~/.hermes/skills/productivity/workspace-and-documents/scripts/google-workspace/google_api.py`
+(what Lucy runs) plus the repo copy. Verify with
+`md5 <copies>` — they must match. The `.archive/` copy is inactive; leave it.
+
+Behavioral guidance already matched this (the `email-recipient-integrity` skill +
+`correspondence/references/shared-principal-reply-all.md` say "Reply All, preserve
+roles, verify real headers") — the bug was purely that the *tool* couldn't obey.
 
 ## Runtime-only config (NOT in this repo)
 

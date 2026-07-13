@@ -789,6 +789,8 @@ class TestThreadContext(unittest.TestCase):
             "uid": b"10",
             "sender_addr": "user@test.com",
             "sender_name": "User",
+            "to_header": "Lucy <hermes@test.com>, Ryan <ryan@test.com>",
+            "cc_header": "Valerie <valerie@test.com>",
             "subject": "Project question",
             "message_id": "<original@test.com>",
             "in_reply_to": "",
@@ -800,8 +802,11 @@ class TestThreadContext(unittest.TestCase):
         asyncio.run(adapter._dispatch_message(msg_data))
         ctx = adapter._thread_context.get("user@test.com")
         self.assertIsNotNone(ctx)
+        assert ctx is not None
         self.assertEqual(ctx["subject"], "Project question")
         self.assertEqual(ctx["message_id"], "<original@test.com>")
+        self.assertEqual(ctx["to"], "user@test.com, ryan@test.com")
+        self.assertEqual(ctx["cc"], "valerie@test.com")
 
     def test_reply_uses_re_prefix(self):
         """Reply subject should have Re: prefix."""
@@ -823,6 +828,26 @@ class TestThreadContext(unittest.TestCase):
             self.assertEqual(send_call["In-Reply-To"], "<original@test.com>")
             self.assertEqual(send_call["References"], "<original@test.com>")
             self.assertIn("Date", send_call)
+
+    def test_reply_all_preserves_to_and_cc_recipients(self):
+        """Shared email threads retain all original principal recipients."""
+        adapter = self._make_adapter()
+        adapter._thread_context["ryan@test.com"] = {
+            "subject": "CCs and email skills",
+            "message_id": "<original@test.com>",
+            "to": "ryan@test.com, colleague@test.com",
+            "cc": "valerie@test.com",
+        }
+
+        with patch("smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value = mock_server
+
+            adapter._send_email("ryan@test.com", "Both recipients are included.", None)
+
+            sent = mock_server.send_message.call_args[0][0]
+            self.assertEqual(sent["To"], "ryan@test.com, colleague@test.com")
+            self.assertEqual(sent["Cc"], "valerie@test.com")
 
     def test_reply_does_not_double_re(self):
         """If subject already has Re:, don't add another."""
