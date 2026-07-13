@@ -22,7 +22,7 @@ A brand-new file never conflicts; a one-line hook almost never does.
 
 ```bash
 # Every hook we inject into upstream-owned files is tagged:
-grep -rn "# fork" gateway/ plugins/ scripts/
+grep -rn "# fork" gateway/ plugins/ scripts/ skills/
 # Every upstream file that imports our package:
 grep -rln "gateway.local_patches" gateway/ plugins/
 ```
@@ -42,7 +42,7 @@ merge drops it). `CLAUDE.md` is fork-owned and safe.
    take upstream's structural change, then re-apply our one-line hook on top
    (re-add the `# fork` import/call). See the per-patch tables below for what
    each hook should look like.
-3. Re-verify hooks are all present: `grep -rn "# fork" gateway/ plugins/ scripts/`
+3. Re-verify hooks are all present: `grep -rn "# fork" gateway/ plugins/ scripts/ skills/`
    and diff the count against this doc.
 4. Import smoke test with the runtime venv (catches missing hooks / new upstream
    deps / import cycles — `principals.py` must **not** import `base`):
@@ -164,30 +164,46 @@ the technical detail (iteration/tool/elapsed) in logs only. Logic:
 `package-lock.json` entry). Baileys needs it to build outbound link-preview
 cards. Inherently inline (a JSON data line — nothing to extract).
 
-### 7. Google Workspace skill — Gmail Reply All
-`gmail reply` upstream is **sender-only**: it fetches only `From/Subject/Message-ID`,
-hardcodes `To = sender`, and sets no `Cc` — so any principal (or anyone) who was
-on the original `To`/`Cc` gets silently dropped from Lucy's reply. This is the
-**pull path** and the one that matters for external threads (the push adapter
-drops non-allowlisted senders, so external two-way mail rides this skill).
+### 7. Google Workspace skill — Reply All + calendar routing
+`skills/productivity/google-workspace/scripts/google_api.py` is **upstream-owned**,
+so it follows the same rule as every other upstream file: fork logic lives in a
+**fork-owned sibling module `_gws_fork.py`** (next to it, imported the same way the
+script already imports `_hermes_home`), and `google_api.py` carries only
+`# fork`-tagged call-ins. `_gws_fork.py` provides:
 
-**Fix** (`skills/productivity/google-workspace/scripts/google_api.py`, direct
-edit — skills don't use the `gateway/local_patches/` hook mechanism): `gmail_reply`
-now also reads `To`/`Cc`, resolves our own address via `getProfile`, and calls the
-new `_reply_all_recipients()` helper to Reply All **by default** — original sender
-+ everyone on To → To, Cc → Cc, our own address dropped, de-duped. New flags:
-`--to`/`--cc` (additive) and `--no-reply-all` (restores sender-only). Both the
-`gws`-binary and Python-client branches are patched identically.
+- `reply_all_recipients(...)` — Reply All recipient math (see below).
+- `resolve_calendar(alias)` — maps a friendly `--calendar` alias to a real ID.
+- `build_update_patch(...)` — assembles the `events.patch` body for `calendar update`.
 
-**Multi-copy gotcha:** this file is deployed to `~/.hermes/skills/` and is **not**
-this repo — the tracked copy here is the source. When you change it, sync all live
-copies: the active `~/.hermes/skills/productivity/workspace-and-documents/scripts/google-workspace/google_api.py`
-(what Lucy runs) plus the repo copy. Verify with
-`md5 <copies>` — they must match. The `.archive/` copy is inactive; leave it.
+**Reply All (pull path).** Upstream `gmail reply` was **sender-only**: it fetched
+only `From/Subject/Message-ID`, hardcoded `To = sender`, set no `Cc` — dropping
+anyone else on the thread. This is the path external two-way mail rides (the push
+adapter drops non-allowlisted senders). `gmail_reply` now reads `To`/`Cc`, resolves
+our own address via `getProfile`, and calls `reply_all_recipients()` to Reply All
+**by default** (original sender + To → To, Cc → Cc, our address dropped, de-duped);
+flags `--to`/`--cc` (additive) and `--no-reply-all` (sender-only). Behavioral
+guidance already matched this (`email-recipient-integrity` skill +
+`correspondence/references/shared-principal-reply-all.md`) — only the tool couldn't obey.
 
-Behavioral guidance already matched this (the `email-recipient-integrity` skill +
-`correspondence/references/shared-principal-reply-all.md` say "Reply All, preserve
-roles, verify real headers") — the bug was purely that the *tool* couldn't obey.
+**Calendar routing.** Lucy kept sending events to Apple/local calendars or her own
+`primary` instead of the shared Google calendar. Changes: (a) `--calendar` now
+accepts **aliases** via `resolve_calendar()`, read from **`~/.hermes/calendar_aliases.json`**
+(NOT in the repo — keeps principal calendar IDs out of pushed code, same policy as
+the principal banners); an unknown name falls through to a literal ID. (b) new
+`calendar update EVENT_ID …` subcommand (upstream only had list/create/delete) that
+patches an event in place. (c) fixed the usage docstring that advertised
+`--from/--to` when the real flags are `--start/--end`. Principal-specific routing
+("shared events → `--calendar shared`", never Apple/local) lives in the runtime-only
+`SOUL.md` and the active bundle `SKILL.md`, not in committed code.
+
+**Multi-copy + aliases-file gotcha:** the skill is deployed to `~/.hermes/skills/`
+(**not** this repo). When you change `google_api.py` **or `_gws_fork.py`**, sync all
+copies: the active `~/.hermes/skills/productivity/workspace-and-documents/scripts/google-workspace/`
+pair (what Lucy runs) + the repo copy under `scripts/`; verify with `md5`. The
+`.archive/` copy is inactive; leave it. The aliases file
+`~/.hermes/calendar_aliases.json` is deploy-time state — recreate it if lost (maps
+`shared`/`ryan`/`lucy` → calendar IDs); without it, alias names simply don't resolve
+(real IDs still work).
 
 ## Runtime-only config (NOT in this repo)
 

@@ -201,14 +201,24 @@ $GAPI gmail modify MESSAGE_ID --remove-labels UNREAD
 ### Calendar
 
 ```bash
-# List events (defaults to next 7 days)
+# List events (defaults to next 7 days). Flags are --start/--end (NOT --from/--to).
 $GAPI calendar list
 $GAPI calendar list --start 2026-03-01T00:00:00Z --end 2026-03-07T23:59:59Z
 
+# Pick the calendar with --calendar: a calendar ID, "primary", or a friendly
+# alias defined in ~/.hermes/calendar_aliases.json (e.g. "shared" for a shared
+# household/team calendar). Unknown names fall through to a literal calendar ID.
+$GAPI calendar list --calendar shared
+
 # Create event (ISO 8601 with timezone required)
-$GAPI calendar create --summary "Team Standup" --start 2026-03-01T10:00:00-06:00 --end 2026-03-01T10:30:00-06:00
+$GAPI calendar create --calendar shared --summary "Team Standup" --start 2026-03-01T10:00:00-06:00 --end 2026-03-01T10:30:00-06:00
 $GAPI calendar create --summary "Lunch" --start 2026-03-01T12:00:00Z --end 2026-03-01T13:00:00Z --location "Cafe"
 $GAPI calendar create --summary "Review" --start 2026-03-01T14:00:00Z --end 2026-03-01T15:00:00Z --attendees "alice@co.com,bob@co.com"
+
+# Update an existing event in place (patch: only the fields you pass change; the
+# event ID and attendee RSVPs survive). Use this to edit — never delete-and-recreate.
+$GAPI calendar update EVENT_ID --start 2026-03-01T11:00:00-06:00 --summary "Standup (moved)"
+$GAPI calendar update EVENT_ID --calendar shared --location "Room 2"
 
 # Delete event
 $GAPI calendar delete EVENT_ID

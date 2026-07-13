@@ -10,8 +10,10 @@ Usage:
   python google_api.py gmail get MESSAGE_ID
   python google_api.py gmail send --to user@example.com --subject "Hi" --body "Hello"
   python google_api.py gmail reply MESSAGE_ID --body "Thanks"  # Reply All by default: preserves original To/Cc (minus Lucy); --no-reply-all for sender-only
-  python google_api.py calendar list [--from DATE] [--to DATE] [--calendar primary]
-  python google_api.py calendar create --summary "Meeting" --start DATETIME --end DATETIME
+  python google_api.py calendar list [--start ISO8601] [--end ISO8601] [--calendar shared]
+  python google_api.py calendar create --summary "Meeting" --start ISO8601 --end ISO8601 [--calendar shared]
+  python google_api.py calendar update EVENT_ID [--start ISO8601] [--summary ...] [--calendar shared]
+  # --calendar accepts an alias from ~/.hermes/calendar_aliases.json (e.g. shared) — or any calendar ID
   python google_api.py drive search "budget report" [--max 10]
   python google_api.py contacts list [--max 20]
   python google_api.py sheets get SHEET_ID RANGE
@@ -29,7 +31,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
-from email.utils import getaddresses
 from pathlib import Path
 
 # Ensure sibling modules (_hermes_home) are importable when run standalone.
@@ -38,6 +39,15 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from _hermes_home import get_hermes_home
+
+# Fork logic (Reply All recipients, calendar alias resolution, update-patch
+# builder) lives in the fork-owned sibling module; imported here as single-line
+# call-ins so this upstream file carries no fork logic of its own.
+from _gws_fork import (  # fork
+    build_update_patch as _build_update_patch,
+    reply_all_recipients as _reply_all_recipients,
+    resolve_calendar as _resolve_calendar,
+)
 
 HERMES_HOME = get_hermes_home()
 TOKEN_PATH = HERMES_HOME / "google_token.json"
@@ -135,40 +145,6 @@ def _headers_dict(msg: dict) -> dict[str, str]:
         for h in msg.get("payload", {}).get("headers", [])
         if h.get("name")
     }
-
-
-def _reply_all_recipients(headers, self_address, extra_to="", extra_cc="", reply_all=True):
-    """Compute (To, Cc) header strings for a reply.
-
-    Reply All (the default) preserves every recipient of the original message:
-    the original sender plus everyone already on To go on To, everyone on Cc
-    stays on Cc. Our own address is always dropped so we never reply to
-    ourselves, and addresses are de-duplicated case-insensitively (first-seen
-    order kept). Any --to/--cc values are added on top. With reply_all=False
-    only the original sender (plus explicit --to/--cc) is used — the old
-    sender-only behavior, now opt-in via --no-reply-all.
-    """
-    self_norm = (self_address or "").strip().lower()
-    seen = set()
-    to_list: list[str] = []
-    cc_list: list[str] = []
-
-    def add(target, raw):
-        for _name, addr in getaddresses([raw or ""]):
-            norm = addr.strip().lower()
-            if not norm or norm == self_norm or norm in seen:
-                continue
-            seen.add(norm)
-            target.append(addr.strip())
-
-    add(to_list, headers.get("from", ""))
-    if reply_all:
-        add(to_list, headers.get("to", ""))
-    add(to_list, extra_to)
-    if reply_all:
-        add(cc_list, headers.get("cc", ""))
-    add(cc_list, extra_cc)
-    return ", ".join(to_list), ", ".join(cc_list)
 
 
 def _extract_message_body(msg: dict) -> str:
@@ -524,6 +500,7 @@ def gmail_modify(args):
 
 
 def calendar_list(args):
+    args.calendar = _resolve_calendar(args.calendar)  # fork
     now = datetime.now(timezone.utc)
     time_min = _datetime_with_timezone(args.start or now.isoformat())
     time_max = _datetime_with_timezone(args.end or (now + timedelta(days=7)).isoformat())
@@ -578,6 +555,7 @@ def calendar_list(args):
 
 
 def calendar_create(args):
+    args.calendar = _resolve_calendar(args.calendar)  # fork
     event = {
         "summary": args.summary,
         "start": {"dateTime": args.start},
@@ -615,7 +593,49 @@ def calendar_create(args):
 
 
 
+def calendar_update(args):
+    """Patch an existing event in place (time, title, location, etc.).
+
+    Only the fields you pass are changed; everything else on the event — and its
+    ID, so attendee RSVPs survive — is preserved. This is the right way to change
+    an event: never delete-and-recreate for an edit.
+    """
+    args.calendar = _resolve_calendar(args.calendar)  # fork
+    patch = _build_update_patch(  # fork
+        args.summary, args.start, args.end, args.location, args.description
+    )
+    if not patch:
+        print(json.dumps({"error": "nothing to update — pass at least one of --summary/--start/--end/--location/--description"}))
+        return
+
+    if _gws_binary():
+        result = _run_gws(
+            ["calendar", "events", "patch"],
+            params={"calendarId": args.calendar, "eventId": args.event_id},
+            body=patch,
+        )
+        print(json.dumps({
+            "status": "updated",
+            "id": result.get("id", args.event_id),
+            "summary": result.get("summary", ""),
+            "htmlLink": result.get("htmlLink", ""),
+        }, indent=2))
+        return
+
+    service = build_service("calendar", "v3")
+    result = service.events().patch(
+        calendarId=args.calendar, eventId=args.event_id, body=patch
+    ).execute()
+    print(json.dumps({
+        "status": "updated",
+        "id": result["id"],
+        "summary": result.get("summary", ""),
+        "htmlLink": result.get("htmlLink", ""),
+    }, indent=2))
+
+
 def calendar_delete(args):
+    args.calendar = _resolve_calendar(args.calendar)  # fork
     if _gws_binary():
         _run_gws(["calendar", "events", "delete"], params={"calendarId": args.calendar, "eventId": args.event_id})
         print(json.dumps({"status": "deleted", "eventId": args.event_id}))
@@ -1178,6 +1198,16 @@ def main():
     p.add_argument("--attendees", default="", help="Comma-separated email addresses")
     p.add_argument("--calendar", default="primary")
     p.set_defaults(func=calendar_create)
+
+    p = cal_sub.add_parser("update")
+    p.add_argument("event_id")
+    p.add_argument("--summary", default="")
+    p.add_argument("--start", default="", help="New start (ISO 8601 with timezone)")
+    p.add_argument("--end", default="", help="New end (ISO 8601 with timezone)")
+    p.add_argument("--location", default="")
+    p.add_argument("--description", default="")
+    p.add_argument("--calendar", default="primary")
+    p.set_defaults(func=calendar_update)
 
     p = cal_sub.add_parser("delete")
     p.add_argument("event_id")
