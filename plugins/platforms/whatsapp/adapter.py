@@ -1191,14 +1191,15 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 metadata["whatsapp_from_owner"] = True
                 if not body.startswith(_OWNER_REPLY_PREFIX):
                     body = f"{_OWNER_REPLY_PREFIX}{body}"
-            return MessageEvent(
+            from gateway.local_patches.principals import apply_event_identity  # fork
+            return apply_event_identity(MessageEvent(  # fork
                 text=body, message_type=msg_type, source=source, raw_message=data, message_id=data.get("messageId"),
                 media_urls=cached_urls, media_types=media_types, media_text_inlined=media_text_inlined, metadata=metadata,
                 reply_to_message_id=str(raw_reply_id) if raw_reply_id is not None else None,
                 reply_to_text=str(data.get("quotedText") or "").strip() or None,
                 reply_to_author_id=(self._normalize_whatsapp_id(data.get("quotedParticipant")) or None) if quoted else None,
                 reply_to_is_own_message=self._message_is_reply_to_bot(data) if quoted else False,
-            )
+            ))
         except Exception as e:
             print(f"[{self.name}] Error building event: {e}")
             return None

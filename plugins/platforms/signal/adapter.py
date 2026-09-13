@@ -492,6 +492,7 @@ class SignalAdapter(BasePlatformAdapter):
             reply_to_is_own_message=self._quote_references_own_message(reply_to_id, reply_to_author),
         )
         logger.debug("Signal: message from %s in %s: %s", redact_phone(sender), chat_id[:20], (text or "")[:50])
+        from gateway.local_patches.principals import apply_event_identity; apply_event_identity(event)  # fork
         await self.handle_message(event)
 
     def _group_allowed(self, group_id: str) -> bool:

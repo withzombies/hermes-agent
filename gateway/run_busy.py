@@ -903,7 +903,7 @@ class GatewayBusySessionMixin:
             head, tail = t("gateway.busy.queued_head"), t("gateway.busy.queued_tail")
         else:
             head, tail = t("gateway.busy.interrupting_head"), t("gateway.busy.interrupting_tail")
-        message = t("gateway.busy.ack", head=head, detail=status_detail, tail=tail)
+        from gateway.local_patches.status_copy import busy_ack_text; message = busy_ack_text(is_steer_mode=is_steer_mode, is_queue_mode=is_queue_mode, is_redirect_mode=is_redirect_mode, demoted_for_subagents=demoted_for_subagents, demoted_for_compression=demoted_for_compression, status_detail=status_detail)  # fork
 
         # One-time onboarding hint about the queue/interrupt knob (flag persisted to config.yaml).
         try:

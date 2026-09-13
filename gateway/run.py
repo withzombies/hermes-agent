@@ -730,6 +730,11 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
         return None
     if _gateway_surface_passes_raw_text(platform):
         return text
+    if _gateway_quiet():  # fork
+        # Operator opted out of system/status chatter — drop on messaging
+        # surfaces. The message is still emitted to logs via the agent's
+        # status path.
+        return None
 
     text = _redact_gateway_user_facing_secrets(text)
     # Opt-in `compression.progress_notices` lets ROUTINE (template-derived) progress through; other noise stays.
@@ -1545,6 +1550,10 @@ def _home_thread_env_var(platform_name: str) -> str:
     return f"{_home_target_env_var(platform_name)}_THREAD_ID"
 
 
+# _gateway_quiet: local fork patch — logic lives in gateway/local_patches/quiet.py
+from gateway.local_patches.quiet import is_quiet as _gateway_quiet  # noqa: E402  # fork
+
+
 def _restart_notification_pending() -> bool:
     """Return True when a /restart completion marker is waiting to be delivered."""
     return (_hermes_home / ".restart_notify.json").exists()
@@ -2094,6 +2103,7 @@ def _bridge_config_to_env(_cfg: dict) -> None:
         os.environ["HERMES_REDACT_SECRETS"] = str(_security_cfg["redact_secrets"]).lower()
     # Media policy uses the shared bridge so standalone entrypoints (`hermes cron run`) match.
     _gateway_cfg = _cfg.get("gateway", {})
+    _bridge_section_to_env(_gateway_cfg, {"quiet_system_messages": "HERMES_QUIET_SYSTEM_MESSAGES"})  # fork
     if isinstance(_gateway_cfg, dict):
         from gateway.media_policy import apply_media_policy_env
         apply_media_policy_env(_cfg)

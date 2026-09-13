@@ -447,6 +447,9 @@ def _attach_file(msg: MIMEMultipart, path: Path, filename: str) -> None:
         msg.attach(part)
 
 
+from gateway.local_patches.email_outbound import apply_reply_all_headers, apply_signature, default_subject, from_header, lift_subject, reply_all_context  # fork
+
+
 class EmailAdapter(BasePlatformAdapter):
     """Email gateway adapter using IMAP (receive) and SMTP (send)."""
     serial_receive_loop = True  # the IMAP poll loop awaits each message before dispatching the next
@@ -744,6 +747,7 @@ class EmailAdapter(BasePlatformAdapter):
         sender_authenticated, auth_reason = _verify_sender_authentication(msg, sender_addr, authserv_id=self._authserv_id)
         return {"uid": uid, "sender_addr": sender_addr, "sender_name": sender_name, "subject": subject,
                 "message_id": msg.get("Message-ID", ""), "in_reply_to": msg.get("In-Reply-To", ""),
+                "to_header": msg.get("To", ""), "cc_header": msg.get("Cc", ""),  # fork
                 "date": msg.get("Date", ""), "sender_authenticated": sender_authenticated, "auth_reason": auth_reason}
 
     def _parse_fetched_headers(self, uid: bytes, raw_headers: bytes | bytearray) -> Optional[dict[str, Any]]:
@@ -832,6 +836,7 @@ class EmailAdapter(BasePlatformAdapter):
         # of message_type, but document-context injection gates strictly on MessageType.DOCUMENT — so DOCUMENT surfaces both.
         kinds = {att["type"] for att in attachments}
         self._thread_context[sender_addr] = {"subject": subject, "message_id": msg_data["message_id"]}
+        self._thread_context[sender_addr].update(reply_all_context(msg_data.get("to_header", ""), msg_data.get("cc_header", ""), sender_addr, self._address))  # fork
         name = msg_data["sender_name"] or sender_addr
         event = MessageEvent(
             text=text or "(empty email)", message_id=msg_data["message_id"],
@@ -863,15 +868,17 @@ class EmailAdapter(BasePlatformAdapter):
                    attach_empty_body: bool = False) -> tuple[MIMEMultipart, str, str]:
         """Build a threaded reply skeleton. Returns ``(msg, msg_id, subject)``."""
         msg, ctx = MIMEMultipart(), self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject") or default_subject()  # fork
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         original_msg_id = reply_to_msg_id or ctx.get("message_id")
         threading = (("In-Reply-To", original_msg_id), ("References", original_msg_id)) if original_msg_id else ()
         msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._message_id_domain()}>"
-        for key, value in (("From", self._address), ("To", to_addr), ("Subject", subject), *threading,
+        for key, value in (("From", from_header(self._address)), ("To", to_addr), ("Subject", subject), *threading,  # fork
                            ("Date", formatdate(localtime=True)), ("Message-ID", msg_id)):
             msg[key] = value
+        apply_reply_all_headers(msg, ctx, to_addr)  # fork
+        body = apply_signature(body)  # fork
         if body or attach_empty_body:
             msg.attach(MIMEText(body, "plain", "utf-8"))
         return msg, msg_id, subject
@@ -974,8 +981,9 @@ async def _standalone_send(pconfig, chat_id, message, *, thread_id=None, media_f
     if not all([address, password, smtp_host]):
         return send_error("Email not configured (EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_SMTP_HOST required)")
     try:
-        msg = MIMEText(message, "plain", "utf-8")
-        for key, value in (("From", address), ("To", chat_id), ("Subject", t("platform.email.standalone_subject")), ("Date", formatdate(localtime=True))):
+        subject, message = lift_subject(message)  # fork
+        msg = MIMEText(apply_signature(message), "plain", "utf-8")  # fork
+        for key, value in (("From", from_header(address)), ("To", chat_id), ("Subject", subject), ("Date", formatdate(localtime=True))):  # fork
             msg[key] = value
         server = _open_smtp(smtp_host, smtp_port, smtp_security, _tls_context(smtp_tls_verify, smtp_host), smtplib.SMTP, smtplib.SMTP_SSL)
         server.login(address, password)

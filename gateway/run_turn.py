@@ -1398,6 +1398,9 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
 
     async def _run_agent_inactivity_warning(self, worker, source, _status_thread_metadata) -> None:
         """Staged one-shot warning before the inactivity timeout escalates."""
+        from gateway.local_patches.quiet import is_quiet; quiet = is_quiet()  # fork
+        if quiet:
+            return
         from gateway.run import _interim_metadata
         _warn_adapter = self._delivery_adapter_for(source)
         if not _warn_adapter:

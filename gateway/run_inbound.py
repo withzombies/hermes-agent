@@ -1412,6 +1412,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             source, group_sessions_per_user=getattr(self.config, "group_sessions_per_user", True),
             thread_sessions_per_user=getattr(self.config, "thread_sessions_per_user", False),
         )
+        from gateway.local_patches.principals import always_prefix_speaker; _is_shared_multi_user = _is_shared_multi_user or always_prefix_speaker()  # fork
         if _is_shared_multi_user and source.user_name:
             # Display names are attacker-influenceable: neutralize newlines/control chars or a
             # hostile name masquerades as a fake markdown section (mirrors build_session_context_prompt).

@@ -206,6 +206,9 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
 
     async def _deliver_platform_notice(self, source, content: str) -> None:
         """Deliver a setup/operational notice using platform-specific privacy rules."""
+        from gateway.local_patches.quiet import is_quiet; content = "" if is_quiet() else content  # fork
+        if not content:
+            return
         from gateway.run import _is_slack_ignored_channel
         adapter = self._delivery_adapter_for(source)
         if not adapter:

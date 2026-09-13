@@ -9,9 +9,11 @@ Usage:
   python google_api.py gmail search "is:unread" [--max 10]
   python google_api.py gmail get MESSAGE_ID
   python google_api.py gmail send --to user@example.com --subject "Hi" --body "Hello"
-  python google_api.py gmail reply MESSAGE_ID --body "Thanks"
-  python google_api.py calendar list [--from DATE] [--to DATE] [--calendar primary]
-  python google_api.py calendar create --summary "Meeting" --start DATETIME --end DATETIME
+  python google_api.py gmail reply MESSAGE_ID --body "Thanks"  # Reply All by default: preserves original To/Cc (minus Lucy); --no-reply-all for sender-only
+  python google_api.py calendar list [--start ISO8601] [--end ISO8601] [--calendar shared]
+  python google_api.py calendar create --summary "Meeting" --start ISO8601 --end ISO8601 [--calendar shared]
+  python google_api.py calendar update EVENT_ID [--start ISO8601] [--summary ...] [--calendar shared]
+  # --calendar accepts an alias from ~/.hermes/calendar_aliases.json (e.g. shared) — or any calendar ID
   python google_api.py drive search "budget report" [--max 10]
   python google_api.py contacts list [--max 20]
   python google_api.py sheets get SHEET_ID RANGE
@@ -19,6 +21,8 @@ Usage:
   python google_api.py sheets append SHEET_ID RANGE --values '[[...]]'
   python google_api.py docs get DOC_ID
 """
+
+from __future__ import annotations
 
 import argparse
 import base64
@@ -37,6 +41,15 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from _hermes_home import get_hermes_home
+
+# Fork logic (Reply All recipients, calendar alias resolution, update-patch
+# builder) lives in the fork-owned sibling module; imported here as single-line
+# call-ins so this upstream file carries no fork logic of its own.
+from _gws_fork import (  # fork
+    build_update_patch as _build_update_patch,
+    reply_all_recipients as _reply_all_recipients,
+    resolve_calendar as _resolve_calendar,
+)
 
 HERMES_HOME = get_hermes_home()
 TOKEN_PATH = HERMES_HOME / "google_token.json"
@@ -421,6 +434,13 @@ def gmail_send(args):
 
 
 def gmail_reply(args):
+    # Reply All by default so principals (or anyone) already on the thread are
+    # never silently dropped; --no-reply-all falls back to sender-only.
+    reply_all = not getattr(args, "no_reply_all", False)
+    extra_to = getattr(args, "to", "") or ""
+    extra_cc = getattr(args, "cc", "") or ""
+    meta_headers = ["From", "To", "Cc", "Subject", "Message-ID"]
+
     if _gws_binary():
         original = _run_gws(
             ["gmail", "users", "messages", "get"],
@@ -428,17 +448,28 @@ def gmail_reply(args):
                 "userId": "me",
                 "id": args.message_id,
                 "format": "metadata",
-                "metadataHeaders": ["From", "Subject", "Message-ID"],
+                "metadataHeaders": meta_headers,
             },
         )
         headers = _headers_dict(original)
+        try:
+            self_address = _run_gws(
+                ["gmail", "users", "getProfile"], params={"userId": "me"}
+            ).get("emailAddress", "")
+        except Exception:
+            self_address = ""
 
         subject = headers.get("subject", "")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
 
+        to_hdr, cc_hdr = _reply_all_recipients(
+            headers, self_address, extra_to, extra_cc, reply_all
+        )
         message = MIMEText(args.body)
-        message["To"] = headers.get("from", "")
+        message["To"] = to_hdr
+        if cc_hdr:
+            message["Cc"] = cc_hdr
         message["Subject"] = subject
         if args.from_header:
             message["From"] = args.from_header
@@ -452,22 +483,31 @@ def gmail_reply(args):
             params={"userId": "me"},
             body={"raw": raw, "threadId": original["threadId"]},
         )
-        print(json.dumps({"status": "sent", "id": result["id"], "threadId": result.get("threadId", "")}, indent=2))
+        print(json.dumps({"status": "sent", "id": result["id"], "threadId": result.get("threadId", ""), "to": to_hdr, "cc": cc_hdr}, indent=2))
         return
 
     service = build_service("gmail", "v1")
     original = service.users().messages().get(
         userId="me", id=args.message_id, format="metadata",
-        metadataHeaders=["From", "Subject", "Message-ID"],
+        metadataHeaders=meta_headers,
     ).execute()
     headers = _headers_dict(original)
+    try:
+        self_address = service.users().getProfile(userId="me").execute().get("emailAddress", "")
+    except Exception:
+        self_address = ""
 
     subject = headers.get("subject", "")
     if not subject.startswith("Re:"):
         subject = f"Re: {subject}"
 
+    to_hdr, cc_hdr = _reply_all_recipients(
+        headers, self_address, extra_to, extra_cc, reply_all
+    )
     message = MIMEText(args.body)
-    message["To"] = headers.get("from", "")
+    message["To"] = to_hdr
+    if cc_hdr:
+        message["Cc"] = cc_hdr
     message["Subject"] = subject
     if args.from_header:
         message["From"] = args.from_header
@@ -479,7 +519,7 @@ def gmail_reply(args):
     body = {"raw": raw, "threadId": original["threadId"]}
 
     result = service.users().messages().send(userId="me", body=body).execute()
-    print(json.dumps({"status": "sent", "id": result["id"], "threadId": result.get("threadId", "")}, indent=2))
+    print(json.dumps({"status": "sent", "id": result["id"], "threadId": result.get("threadId", ""), "to": to_hdr, "cc": cc_hdr}, indent=2))
 
 
 
@@ -524,6 +564,7 @@ def gmail_modify(args):
 
 
 def calendar_list(args):
+    args.calendar = _resolve_calendar(args.calendar)  # fork
     now = datetime.now(UTC)
     time_min = _datetime_with_timezone(args.start or now.isoformat())
     time_max = _datetime_with_timezone(args.end or (now + timedelta(days=7)).isoformat())
@@ -578,6 +619,7 @@ def calendar_list(args):
 
 
 def calendar_create(args):
+    args.calendar = _resolve_calendar(args.calendar)  # fork
     event = {
         "summary": args.summary,
         "start": {"dateTime": args.start},
@@ -615,7 +657,49 @@ def calendar_create(args):
 
 
 
+def calendar_update(args):
+    """Patch an existing event in place (time, title, location, etc.).
+
+    Only the fields you pass are changed; everything else on the event — and its
+    ID, so attendee RSVPs survive — is preserved. This is the right way to change
+    an event: never delete-and-recreate for an edit.
+    """
+    args.calendar = _resolve_calendar(args.calendar)  # fork
+    patch = _build_update_patch(  # fork
+        args.summary, args.start, args.end, args.location, args.description
+    )
+    if not patch:
+        print(json.dumps({"error": "nothing to update — pass at least one of --summary/--start/--end/--location/--description"}))
+        return
+
+    if _gws_binary():
+        result = _run_gws(
+            ["calendar", "events", "patch"],
+            params={"calendarId": args.calendar, "eventId": args.event_id},
+            body=patch,
+        )
+        print(json.dumps({
+            "status": "updated",
+            "id": result.get("id", args.event_id),
+            "summary": result.get("summary", ""),
+            "htmlLink": result.get("htmlLink", ""),
+        }, indent=2))
+        return
+
+    service = build_service("calendar", "v3")
+    result = service.events().patch(
+        calendarId=args.calendar, eventId=args.event_id, body=patch
+    ).execute()
+    print(json.dumps({
+        "status": "updated",
+        "id": result["id"],
+        "summary": result.get("summary", ""),
+        "htmlLink": result.get("htmlLink", ""),
+    }, indent=2))
+
+
 def calendar_delete(args):
+    args.calendar = _resolve_calendar(args.calendar)  # fork
     if _gws_binary():
         _run_gws(["calendar", "events", "delete"], params={"calendarId": args.calendar, "eventId": args.event_id})
         print(json.dumps({"status": "deleted", "eventId": args.event_id}))
@@ -1176,6 +1260,9 @@ def main():
     p.add_argument("message_id", help="Message ID to reply to")
     p.add_argument("--body", required=True)
     p.add_argument("--from", dest="from_header", default="", help="Custom From header (e.g. '\"Agent Name\" <user@example.com>')")
+    p.add_argument("--to", default="", help="Extra To recipients (comma-separated), added on top of Reply All")
+    p.add_argument("--cc", default="", help="Extra Cc recipients (comma-separated), added on top of Reply All")
+    p.add_argument("--no-reply-all", action="store_true", help="Reply to the original sender only; do NOT preserve other To/Cc recipients")
     p.set_defaults(func=gmail_reply)
 
     p = gmail_sub.add_parser("labels")
@@ -1207,6 +1294,16 @@ def main():
     p.add_argument("--attendees", default="", help="Comma-separated email addresses")
     p.add_argument("--calendar", default="primary")
     p.set_defaults(func=calendar_create)
+
+    p = cal_sub.add_parser("update")
+    p.add_argument("event_id")
+    p.add_argument("--summary", default="")
+    p.add_argument("--start", default="", help="New start (ISO 8601 with timezone)")
+    p.add_argument("--end", default="", help="New end (ISO 8601 with timezone)")
+    p.add_argument("--location", default="")
+    p.add_argument("--description", default="")
+    p.add_argument("--calendar", default="primary")
+    p.set_defaults(func=calendar_update)
 
     p = cal_sub.add_parser("delete")
     p.add_argument("event_id")

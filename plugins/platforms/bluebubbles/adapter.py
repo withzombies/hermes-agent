@@ -132,6 +132,12 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         self._private_api_enabled: Optional[bool] = None
         self._helper_connected: bool = False
         self._guid_cache: OrderedDict[str, str] = OrderedDict()
+        # Dedup recently-processed inbound message GUIDs. BlueBubbles fires
+        # both ``new-message`` and a follow-up ``updated-message`` (delivery/
+        # read status) for the same message — and occasionally re-fires the
+        # same event — so without this the agent responds to each inbound
+        # twice. Keyed by message GUID; bounded LRU.
+        self._seen_message_guids: OrderedDict[str, bool] = OrderedDict()
 
     # --- API helpers ---
 
@@ -583,7 +589,10 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             return _ok()
         text = self._value(record.get("text"), record.get("message"), record.get("body")) or ""
         chat_guid, chat_identifier, sender = self._resolve_chat_and_sender(payload, record)
-        session_chat_id = chat_guid or chat_identifier
+        from gateway.local_patches.bluebubbles_gate import sender_allowed, seen_or_add, stable_chat_id, remember_chat_guid  # fork
+        if not sender_allowed(sender) or seen_or_add(self._seen_message_guids, self._value(record.get("guid"), record.get("messageGuid"), record.get("id")), 2000): return _ok()  # fork
+        remember_chat_guid(self._guid_cache, chat_identifier, chat_guid, _GUID_CACHE_SIZE)  # fork
+        session_chat_id = stable_chat_id(chat_guid, chat_identifier, sender, record.get("isGroup"))  # fork
         is_group = bool(record.get("isGroup")) or (";+;" in (chat_guid or ""))
         # Mention gate BEFORE the attachment downloads: an unmentioned group message must not
         # pull every attachment through the REST API only to be dropped.
@@ -605,6 +614,7 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             message_id=self._value(record.get("guid"), record.get("messageGuid"), record.get("id")),
             reply_to_message_id=self._value(record.get("threadOriginatorGuid"), record.get("associatedMessageGuid")),
             media_urls=media_urls, media_types=media_types)
+        from gateway.local_patches.principals import apply_event_identity; apply_event_identity(event)  # fork
         task = asyncio.create_task(self.handle_message(event))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
