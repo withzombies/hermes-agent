@@ -169,14 +169,7 @@ def _extract_message_body(msg: dict) -> str:
 
 
 def _extract_body_text(body: dict) -> str:
-    text_parts = []
-    for element in body.get("content", []):
-        paragraph = element.get("paragraph", {})
-        for pe in paragraph.get("elements", []):
-            text_run = pe.get("textRun", {})
-            if text_run.get("content"):
-                text_parts.append(text_run["content"])
-    return "".join(text_parts)
+    from _gws_docs import extract_body_text; return extract_body_text(body)  # fork
 
 
 def _extract_doc_text(doc: dict) -> str:
@@ -1410,6 +1403,7 @@ def main():
     p.add_argument("--tab", default=None, help="Tab ID to append to (required for multi-tab Docs)")
     p.set_defaults(func=docs_append)
 
+    from _gws_docs import register_commands; register_commands(docs_sub, globals())  # fork
     args = parser.parse_args()
     args.func(args)
 
