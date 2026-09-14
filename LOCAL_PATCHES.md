@@ -25,12 +25,12 @@ fork-owned helper files and include every upstream call site.
 | gateway/run_inbound.py | 1 |
 | gateway/run_notifications.py | 1 |
 | gateway/run_turn.py | 4 |
-| gateway/platforms/bluebubbles.py | 5 |
+| gateway/platforms/bluebubbles.py | 6 |
 | gateway/platforms/signal.py | 1 |
 | plugins/platforms/whatsapp/adapter.py | 2 |
 | plugins/platforms/email/adapter.py | 10 |
 | skills/productivity/google-workspace/scripts/google_api.py | 8 |
-| Total | 36 |
+| Total | 37 |
 
 AGENTS.md also carries a fork pointer. JSON dependency declarations and the
 Python future import are inherently inline data/compiler directives.
@@ -134,7 +134,10 @@ All three fd-hygiene hooks are retired in this rebase:
 The obsolete fd_hygiene module and tests tied to the old reader internals were
 removed. Validate upstream pool/output/resource-limit tests instead.
 
-The BlueBubbles IPv4 override is retired: upstream now keeps 127.0.0.1 itself.
+The BlueBubbles IPv4 override remains required: upstream binds 127.0.0.1 but
+normalizes the registered URL back to localhost. Keep the one-line IPv4 host
+override in _webhook_url. The upstream default-host test expects localhost and
+therefore differs intentionally; verify the registered URL in startup logs.
 
 ## Runtime Configuration
 
