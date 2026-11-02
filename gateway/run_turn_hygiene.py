@@ -611,6 +611,7 @@ class GatewayTurnHygieneMixin:
             new_tokens=_new_tokens,
         ):
             await asyncio.to_thread(_reset_hygiene_failure_streak, self, session_key)
+        from gateway.local_patches.quiet import is_quiet  # fork
         if _hyg_aborted:
             await self._hmwa_hygiene_record_failure_cooldown(
                 hs, session_key, session_entry.session_id,
@@ -621,7 +622,7 @@ class GatewayTurnHygieneMixin:
                 attempt.agent, "session hygiene compression aborted",
                 "AGENT_COMPRESSION_COOLDOWN", "hygiene compression abort activity stamp failed",
             )
-            if not _hyg_fence_cancelled:
+            if not _hyg_fence_cancelled and not is_quiet():  # fork
                 # Force-redact: provider exception text may contain credentials; this reaches users.
                 from agent.redact import redact_sensitive_text
                 _err = redact_sensitive_text(
@@ -631,7 +632,7 @@ class GatewayTurnHygieneMixin:
                     source, attempt.meta, t("gateway.compress.hygiene_failed"), "compression-failure warning",
                 )
         # Configured aux model failed, recovered on the main model: only the user can fix that config.
-        elif _comp is not None and getattr(_comp, "_last_aux_model_failure_model", None):
+        elif _comp is not None and getattr(_comp, "_last_aux_model_failure_model", None) and not is_quiet():  # fork
             _aux_model = getattr(_comp, "_last_aux_model_failure_model", "")
             _aux_err = getattr(_comp, "_last_aux_model_failure_error", None) or t("gateway.shared.unknown_error")
             await self._hmwa_hygiene_notify(

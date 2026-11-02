@@ -5,7 +5,7 @@ upstream is read-only. Deployment/persona context lives in CLAUDE.md.
 
 ## Current Base
 
-Rebased onto upstream `ee4452991d17534aa561f31ee55596d082aa94e7` on 2026-09-13.
+Rebased onto upstream `5e7c2b254d414e4e25105231f818f385fee67469` on 2026-11-02.
 The previous fork history is preserved on `backup/pre-upstream-20260913`.
 The 26 local commits were consolidated before rebasing because upstream moved
 the gateway methods into mixins and consolidated the email send paths.
@@ -167,3 +167,9 @@ the runtime to the new release. Install the locked dependencies, sync active
 skill copies/references, restart with `hermes gateway restart`, and verify the
 new gateway PID, running revision, and channel connections. Do not reset chats
 or mutate their cached conversation history to announce the update.
+
+## November refresh
+
+Previous head: `backup/pre-upstream-20261102`. Adapters now live under
+`plugins/platforms/`; compression notice gates moved to `gateway/run_turn_hygiene.py`.
+Preserved upstream header preflight authentication, attachment ordering, and turn decomposition.

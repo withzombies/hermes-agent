@@ -525,6 +525,7 @@ class TestThreadContext(unittest.TestCase):
             "uid": b"10",
             "sender_addr": "user@test.com",
             "sender_name": "User",
+            "sender_authenticated": True,
             "to_header": "Lucy <hermes@test.com>, Ryan <ryan@test.com>",
             "cc_header": "Valerie <valerie@test.com>",
             "subject": "Project question",
